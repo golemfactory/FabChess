@@ -10,28 +10,29 @@ use core_sdk::search::searcher::{
 };
 use core_sdk::search::timecontrol::{TimeControl, MAX_MOVE_OVERHEAD, MIN_MOVE_OVERHEAD};
 use core_sdk::search::MAX_SEARCH_DEPTH;
-use std::io;
+use std::io::{BufRead, Write};
 use std::sync::{atomic::Ordering, Arc};
 use std::thread;
 use std::time::Duration;
 use std::u64;
 
-pub fn parse_loop() {
+pub fn parse_loop<I: BufRead, O: Write + 'static>(mut stdin: I, stdout: O) {
     let mut history: Vec<GameState> = vec![];
 
     let mut us = UCIEngine::standard();
 
-    let itcs = Arc::new(InterThreadCommunicationSystem::default());
+    let itcs = Arc::new(InterThreadCommunicationSystem::default_with_output(stdout));
     *itcs.cache() =
         Cache::with_size_threaded(itcs.uci_options().hash_size, itcs.uci_options().threads);
     let mut movelist = movegen::MoveList::default();
     let mut attack_container = GameStateAttackContainer::default();
 
-    let stdin = io::stdin();
+    //let mut stdin = io::stdin();
     let mut line = String::new();
     loop {
         line.clear();
-        stdin.read_line(&mut line).ok().unwrap();
+        stdin.read_line(&mut line).unwrap();
+        println!("Read line: {}", line.trim());
         let arg: Vec<&str> = line.split_whitespace().collect();
         if arg.is_empty() {
             continue;
@@ -289,12 +290,14 @@ pub fn setoption(cmd: &[&str], itcs: &Arc<InterThreadCommunicationSystem>) {
                 itcs.uci_options().hash_size = num;
                 let num_threads = itcs.uci_options().threads;
                 *itcs.cache() = Cache::with_size_threaded(num, num_threads);
-                println!("info String Succesfully set Hash to {}", num);
+                writeln!(itcs.output(), "info String Succesfully set Hash to {}", num)
+                    .expect("engine output write failed");
                 return;
             }
             "clearhash" => {
                 itcs.cache().clear_threaded(itcs.uci_options().threads);
-                println!("info String Succesfully cleared hash!");
+                writeln!(itcs.output(), "info String Succesfully cleared hash!")
+                    .expect("engine output write failed");
                 return;
             }
             "threads" => {
@@ -311,7 +314,12 @@ pub fn setoption(cmd: &[&str], itcs: &Arc<InterThreadCommunicationSystem>) {
                     .parse::<u64>()
                     .expect("Invalid MoveOverhead value!");
                 itcs.uci_options().move_overhead = num;
-                println!("info String Succesfully set MoveOverhad to {}", num);
+                writeln!(
+                    itcs.output(),
+                    "info String Succesfully set MoveOverhad to {}",
+                    num
+                )
+                .expect("engine output write failed");
                 return;
             }
             "debugsmpprint" => {
@@ -319,7 +327,12 @@ pub fn setoption(cmd: &[&str], itcs: &Arc<InterThreadCommunicationSystem>) {
                     .parse::<bool>()
                     .expect("Invalid DebugSMPPrint value!");
                 itcs.uci_options().debug_print = val;
-                println!("info String Succesfully set DebugSMPPrint to {}", val);
+                writeln!(
+                    itcs.output(),
+                    "info String Succesfully set DebugSMPPrint to {}",
+                    val
+                )
+                .expect("engine output write failed");
                 return;
             }
             "smpskipratio" => {
@@ -327,7 +340,12 @@ pub fn setoption(cmd: &[&str], itcs: &Arc<InterThreadCommunicationSystem>) {
                     .parse::<usize>()
                     .expect("Invalid SMPSkipRatio value!");
                 itcs.uci_options().skip_ratio = num;
-                println!("info String Succesfully set SMPSkipRatio to {}", num);
+                writeln!(
+                    itcs.output(),
+                    "info String Succesfully set SMPSkipRatio to {}",
+                    num
+                )
+                .expect("engine output write failed");
                 return;
             }
             _ => {

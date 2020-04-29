@@ -18,7 +18,10 @@ use crate::search::searcher::{
 };
 use crate::search::timecontrol::DEFAULT_MOVE_OVERHEAD;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use fake_instant::FakeClock as Instant;
 
 #[derive(Copy, Clone)]
 pub struct UCIOptions {

@@ -16,22 +16,25 @@ use crate::search::reserved_memory::{ReservedAttackContainer, ReservedMoveList};
 use crate::search::{CombinedSearchParameters, ScoredPrincipalVariation, MATE_SCORE};
 use crate::UCIOptions;
 use std::cell::UnsafeCell;
+use std::io::{self, Write, BufWriter};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 #[allow(unused)]
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 #[allow(unused)]
 use std::thread;
-use std::time::Instant;
 
+// FIXME expects used for error handling of writeln
 #[cfg(not(target_arch = "wasm32"))]
 mod imports {
     pub use std::sync::atomic::AtomicU64;
+    pub use std::time::Instant;
 }
 #[cfg(target_arch = "wasm32")]
 mod imports {
+    pub use fake_instant::FakeClock as Instant;
     pub type AtomicU64 = atomic::Atomic<u64>;
 }
 use imports::*;
@@ -43,6 +46,9 @@ pub const MAX_SKIP_RATIO: usize = 1024;
 pub const DEFAULT_THREADS: usize = 1;
 pub const MAX_THREADS: usize = 65536;
 pub const MIN_THREADS: usize = 1;
+
+pub(crate) type Output = BufWriter<Box<dyn io::Write>>;
+
 
 #[derive(Copy, Clone)]
 pub enum DepthInformation {
@@ -64,10 +70,13 @@ pub struct InterThreadCommunicationSystem {
     pub timeout_flag: RwLock<bool>,
     pub saved_time: AtomicU64,
     pub tx: RwLock<Vec<Sender<ThreadInstruction>>>,
+    pub output: Mutex<Output>,
 }
+
 impl Default for InterThreadCommunicationSystem {
     fn default() -> Self {
-        //let (tx_f, rx_f) = channel();
+        // let (tx_f, rx_f) = channel();
+        let output = Box::new(io::stdout());
         InterThreadCommunicationSystem {
             uci_options: UnsafeCell::new(UCIOptions::default()),
             best_pv: Mutex::new(ScoredPrincipalVariation::default()),
@@ -82,10 +91,30 @@ impl Default for InterThreadCommunicationSystem {
             timeout_flag: RwLock::new(false),
             saved_time: AtomicU64::new(0u64),
             tx: RwLock::new(Vec::new()),
+            output: Mutex::new(BufWriter::new(output)),
         }
     }
 }
 impl InterThreadCommunicationSystem {
+    pub fn default_with_output<O: Write + 'static>(output: O) -> Self {
+        InterThreadCommunicationSystem {
+            uci_options: UnsafeCell::new(UCIOptions::default()),
+            best_pv: Mutex::new(ScoredPrincipalVariation::default()),
+            stable_pv: AtomicBool::new(false),
+            depth_info: Mutex::new([DepthInformation::UnSearched; MAX_SEARCH_DEPTH]),
+            nodes_searched: UnsafeCell::new(Vec::new()),
+            seldepth: AtomicUsize::new(0),
+            start_time: RwLock::new(Instant::now()),
+            last_cache_status: Mutex::new(None),
+            cache_status: AtomicUsize::new(0),
+            cache: UnsafeCell::new(Cache::with_size_threaded(0, 1)),
+            timeout_flag: RwLock::new(false),
+            saved_time: AtomicU64::new(0u64),
+            tx: RwLock::new(Vec::new()),
+            output: Mutex::new(BufWriter::new(Box::new(output))),
+        }
+    }
+
     pub fn cache(&self) -> &mut Cache {
         unsafe { self.cache.get().as_mut().unwrap() }
     }
@@ -114,15 +143,15 @@ impl InterThreadCommunicationSystem {
         *itcs_nodes_searched = Vec::with_capacity(new_thread_count);
         for _ in 0..new_thread_count {
             itcs_nodes_searched.push(AtomicU64::new(0));
-        //     let (tx, rx) = channel();
-        //     itcs_tx.push(tx);
-        //     let tx_f = itcs.tx_f.clone();
-        //     let self_arc = Arc::clone(&itcs);
-        //     thread::spawn(move ||
-        //     {
-        //         let mut thread = Thread::new(id, self_arc, rx, tx_f);
-        //         thread.run();
-        //     };
+            //     let (tx, rx) = channel();
+            //     itcs_tx.push(tx);
+            //     let tx_f = itcs.tx_f.clone();
+            //     let self_arc = Arc::clone(&itcs);
+            //     thread::spawn(move ||
+            //     {
+            //         let mut thread = Thread::new(id, self_arc, rx, tx_f);
+            //         thread.run();
+            //     };
         }
     }
 
@@ -144,6 +173,10 @@ impl InterThreadCommunicationSystem {
             .iter()
             .map(|x| x.load(Ordering::Relaxed))
             .sum()
+    }
+
+    pub fn output(&self) -> MutexGuard<Output> {
+        self.output.lock().unwrap()
     }
 
     pub fn register_pv(&self, scored_pv: &ScoredPrincipalVariation, no_fail: bool) {
@@ -188,7 +221,8 @@ impl InterThreadCommunicationSystem {
             } else {
                 format!("score cp {}", scored_pv.score)
             };
-            println!(
+            writeln!(
+                self.output(),
                 "info depth {} seldepth {} nodes {} nps {} hashfull {:.0} time {} {} pv {}",
                 scored_pv.depth,
                 self.seldepth.load(Ordering::Relaxed),
@@ -198,17 +232,20 @@ impl InterThreadCommunicationSystem {
                 self.get_time_elapsed(),
                 score_string,
                 scored_pv.pv
-            );
+            )
+            .expect("engine output write failed");
         }
     }
 
     pub fn report_bestmove(&self) {
-        println!(
+        writeln!(
+            self.output(),
             "bestmove {:?}",
             self.best_pv.lock().unwrap().pv.pv[0]
                 .as_ref()
                 .expect("Could not unwrap pv for bestmove!")
-        );
+        )
+        .expect("engine output write failed");
     }
 
     pub fn get_next_depth(&self, mut from_depth: usize) -> (usize, bool) {
@@ -277,6 +314,10 @@ pub struct Thread {
 }
 
 impl Thread {
+    pub(crate) fn output(&self) -> MutexGuard<Output> {
+        self.itcs.output()
+    }
+
     pub fn replace_current_pv(
         &mut self,
         root: &GameState,
@@ -372,10 +413,12 @@ impl Thread {
 
     fn search(&mut self, max_depth: i16, state: GameState) {
         if self.itcs.uci_options().debug_print {
-            println!(
+            writeln!(
+                self.output(),
                 "info String Thread {} starting the search of state!",
                 self.id
-            );
+            )
+            .expect("engine output write failed");
         }
         let mut curr_depth = 0;
         let mut previous_score: Option<i16> = None;
@@ -388,10 +431,13 @@ impl Thread {
             }
             //Start Aspiration Window
             if self.itcs.uci_options().debug_print {
-                println!(
+                writeln!(
+                    self.output(),
                     "info String Thread {} starting aspiration window with depth {}",
-                    self.id, curr_depth
-                );
+                    self.id,
+                    curr_depth
+                )
+                .expect("engine output write failed");
             }
             let mut delta = if let Some(ps) = previous_score {
                 ps.abs() / 50
@@ -452,10 +498,12 @@ impl Thread {
             }
         }
         if self.itcs.uci_options().debug_print {
-            println!(
+            writeln!(
+                self.output(),
                 "info String Thread {} stopping the search of state!",
                 self.id
-            );
+            )
+            .expect("engine output write failed");
         }
         //Report nodes in the end
         self.itcs.update(
@@ -509,7 +557,8 @@ pub fn search_move(
     if movelist.move_list.is_empty() {
         panic!("The root position given does not have any legal move!");
     } else if movelist.move_list.len() == 1 {
-        println!("bestmove {:?}", movelist.move_list[0].0);
+        writeln!(itcs.output(), "bestmove {:?}", movelist.move_list[0].0)
+            .expect("engine output write failed");
 
         let new_timesaved: u64 = (time_saved_before as i64
             + tc.time_saved(0, time_saved_before, itcs.uci_options().move_overhead))
@@ -531,9 +580,7 @@ pub fn search_move(
         hist.push(*hashes, false);
     }
 
-    println!("step4");
     //Step 4. Send search command
-
     thread.start_search(
         max_depth,
         game_state.clone(),

@@ -12,3 +12,4 @@ texel-tuning = []
 lazy_static = "1.4.0"
 rand = "0.7.3"
 atomic = "0.4.5"
+fake_instant = "0.4.0"

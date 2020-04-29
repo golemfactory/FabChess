@@ -9,6 +9,7 @@ members = [
     "benchmarking",
     "tests"
 ]
+default-members = ["uci-engine"]
 [profile.release]
 opt-level = 3
 lto = true

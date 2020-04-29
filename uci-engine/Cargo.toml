@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 core-sdk = {path = "../core-sdk"}
 atomic = "0.4.5"
+fake_instant = "0.4.0"

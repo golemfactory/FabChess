@@ -1,34 +1,34 @@
-# FabChess
-UCI compliant chess engine in Rust.
+# FabChess for gWASM
+A UCI-compliant chess engine in Rust, ported to gWASM.
+Based on the [original engine](https://github.com/fabianvdW/FabChess) written by Fabian von der Warth.
 
-This is only an engine, connect it with a gui for real usage.
+This is only an engine, use [golemate](https://github.com/golemfactory/golemate) to use with Golem Network.
+
+## Compilation instructions
+First follow the [gWASM docs] to setup the Emscripten WASM toolchain.
+
+Then execute
+```
+./build.sh --release
+```
+to compile the engine in release mode or
+```
+./build.sh
+```
+to compile the engine in debug mode.
+
+[gWASM docs]: https://docs.golem.network/#/Products/gWASM/Quick-start
+
+## Known issues
+* Running under sp-wasm with high hash sizes may cause crashes. See #1.
+* Some of the UCI messages return invalid information, for instance time elapsed is always reported as 0 or used hash is never updated. This is probably not important, though.
+* The release build may sometimes take a very long time to instantiate. See #2.
 
 ## Wiki
 Interested in how it works?
 
 Check out the wiki at: https://github.com/fabianvdW/FabChess/wiki
-## Setup
-Download latest release for your OS in the release section.
-## Compilation Guide
-If you want to compile from source, make sure you have the latest version of Rust and Cargo installed. The only valid way to compile  the engine due to Rust's feature system having issues with workspaces is:
-```
-git clone https://github.com/fabianvdW/FabChess.git
-cd FabChess
-cargo run --release -p uci-engine
-...
-uci
-< id name FabChessDev v1.14.1
-< id author Fabian von der Warth
-< id contributors Erik Imgrund, Marcin Mielniczuk
-< uciok
-go infinite
-...
-```
-For a faster compile including popcount operation for new processors, run
-```
-cargo rustc --release -p uci-engine -- -C target-cpu=native
-```
-The binary will be in `./target/release`
+
 ## Playing strength
 | Version       | 40/4    |  40/40 | Comment |
 |---------------|---------|--------|---------|
@@ -220,7 +220,7 @@ You can run perft on an arbitrary position. Note that if there is no king on the
 ```
 > position startpos
 > perft 6
-< 
+<
 a2a3: 4463267
 b2b3: 5310358
 c2c3: 5417640
